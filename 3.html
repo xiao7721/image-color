@@ -1,0 +1,296 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>图片颜色可视化</title>
+    <style>
+        body {
+            font-family: Arial;
+            max-width: 1200px;
+            margin: 20px auto;
+            padding: 0 20px;
+        }
+        .control-panel {
+            display: flex;
+            gap: 15px;
+            align-items: center;
+            margin-bottom: 20px;
+            flex-wrap: wrap;
+        }
+        .preview-area {
+            display: flex;
+            gap: 30px;
+            margin-bottom: 20px;
+        }
+        .preview-img {
+            max-width: 400px;
+            max-height: 400px;
+            border: 1px solid #ccc;
+        }
+        #chart {
+            width: 600px;
+            height: 400px;
+            border: 1px solid #eee;
+        }
+        .cluster-colors {
+            display: flex;
+            gap: 10px;
+            margin: 10px 0;
+        }
+        .color-block {
+            width: 50px;
+            height: 50px;
+            border-radius: 4px;
+            border: 1px solid #333;
+        }
+        #ai-result {
+            margin-top: 15px;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+        }
+    </style>
+    <script src="https://cdn.jsdelivr.net/npm/echarts/dist/echarts.min.js"></script>
+</head>
+<body>
+    <h1>图片颜色可视化</h1>
+
+    <div class="control-panel">
+        <div><label>上传图片：</label><input type="file" id="imageUpload" accept="image/*"></div>
+        <div><label>聚类K值（K>=5）：</label><input type="number" id="kValue" min="5" value="5"></div>
+        <div>
+            <label>颜色空间：</label>
+            <select id="colorSpace"><option value="rgb">RGB</option><option value="lab">LAB</option></select>
+        </div>
+        <div>
+            <label>图表类型：</label>
+            <select id="chartType"><option value="bar">柱状图</option><option value="pie">饼图</option></select>
+        </div>
+        <button id="runCluster">聚类并可视化</button>
+        <button id="checkHarmony">判断和谐度</button>
+    </div>
+
+    <div class="preview-area">
+        <div>
+            <h3>原图</h3>
+            <img id="preview" class="preview-img">
+        </div>
+        <div>
+            <h3>聚类结果</h3>
+            <div id="chart"></div>
+            <div class="cluster-colors" id="colorBlocks"></div>
+        </div>
+    </div>
+
+    <h3>AI大语言模型判断结果</h3>
+    <div id="ai-result">请先运行聚类</div>
+
+    <script>
+        // 全局变量
+        let imageData = null;
+        let clusterResult = null;
+        let myChart = echarts.init(document.getElementById('chart'));
+
+const DOUBAO_API_KEY = "ark-1ebf2426-bd3b-4a98-b68a-ef7a9fcc97ca-8a259";
+const DOUBAO_MODEL = "doubao-seed-2-0-lite-260215";
+const DOUBAO_API_URL = "https://ark.cn-beijing.volces.com/api/v3/responses";
+        // RGB转LAB
+        function rgbToLab(r, g, b) {
+            r /= 255; g /= 255; b /= 255;
+            r = r > 0.04045 ? Math.pow((r + 0.055) / 1.055, 2.4) : r / 12.92;
+            g = g > 0.04045 ? Math.pow((g + 0.055) / 1.055, 2.4) : g / 12.92;
+            b = b > 0.04045 ? Math.pow((b + 0.055) / 1.055, 2.4) : b / 12.92;
+
+            let x = r * 0.4124 + g * 0.3576 + b * 0.1805;
+            let y = r * 0.2126 + g * 0.7152 + b * 0.0722;
+            let z = r * 0.0193 + g * 0.1192 + b * 0.9505;
+
+            x /= 0.95047; y /= 1.0; z /= 1.08883;
+            x = x > 0.008856 ? Math.pow(x, 1/3) : 7.787 * x + 16/116;
+            y = y > 0.008856 ? Math.pow(y, 1/3) : 7.787 * y + 16/116;
+            z = z > 0.008856 ? Math.pow(z, 1/3) : 7.787 * z + 16/116;
+
+            return [116 * y - 16, 500 * (x - y), 200 * (y - z)];
+        }
+
+        // LAB转RGB
+        function labToRgb(L, a, b) {
+            let y = (L + 16) / 116, x = a / 500 + y, z = y - b / 200;
+            let x3 = Math.pow(x,3), y3 = Math.pow(y,3), z3 = Math.pow(z,3);
+            x = x3 > 0.008856 ? x3 : (x - 16/116)/7.787;
+            y = y3 > 0.008856 ? y3 : (y - 16/116)/7.787;
+            z = z3 > 0.008856 ? z3 : (z - 16/116)/7.787;
+
+            x *= 0.95047; y *= 1; z *= 1.08883;
+            let r = x * 3.2406 + y * -1.5372 + z * -0.4986;
+            let g = x * -0.9689 + y * 1.8758 + z * 0.0415;
+            let bv = x * 0.0557 + y * -0.2040 + z * 1.0570;
+
+            r = r > 0.0031308 ? 1.055 * Math.pow(r,1/2.4)-0.055 : 12.92 * r;
+            g = g > 0.0031308 ? 1.055 * Math.pow(g,1/2.4)-0.055 : 12.92 * g;
+            bv = bv > 0.0031308 ? 1.055 * Math.pow(bv,1/2.4)-0.055 : 12.92 * bv;
+
+            return [Math.max(0,Math.min(255,Math.round(r*255))),
+                    Math.max(0,Math.min(255,Math.round(g*255))),
+                    Math.max(0,Math.min(255,Math.round(bv*255)))];
+        }
+
+        // 距离计算
+        function dist(a, b) {
+            return Math.sqrt(a.reduce((s, v, i) => s + (v - b[i])**2, 0));
+        }
+
+        // K-Means聚类
+        function kmeans(pixels, k) {
+            let centers = Array.from({length:k},()=>pixels[Math.random()*pixels.length|0]);
+            for(let iter=0;iter<20;iter++){
+                let clusters = Array.from({length:k},()=>[]);
+                for(let p of pixels){
+                    let idx = centers.reduce((m, c, i) => dist(p,c)<dist(p,centers[m])?i:m,0);
+                    clusters[idx].push(p);
+                }
+                centers = clusters.map(c=>c[0]?c[0].map((_,i)=>c.reduce((s,p)=>s+p[i],0)/c.length):centers[0]);
+            }
+            let counts = centers.map(c=>pixels.filter(p=>dist(p,c)==centers.reduce((d,cc)=>Math.min(d,dist(p,cc)),Infinity)).length);
+            return {centers, counts};
+        }
+
+        // 上传图片
+        document.getElementById('imageUpload').onchange = e => {
+            let reader = new FileReader();
+            reader.onload = e => {
+                let img = new Image();
+                img.onload = () => {
+                    let canvas = document.createElement('canvas');
+                    let ctx = canvas.getContext('2d');
+                    let s = Math.min(200/img.width,200/img.height);
+                    canvas.width = img.width*s;
+                    canvas.height = img.height*s;
+                    ctx.drawImage(img,0,0,canvas.width,canvas.height);
+                    imageData = ctx.getImageData(0,0,canvas.width,canvas.height);
+                    document.getElementById('preview').src = e.target.result;
+                };
+                img.src = e.target.result;
+            };
+            reader.readAsDataURL(e.target.files[0]);
+        };
+
+        // 运行聚类
+        document.getElementById('runCluster').onclick = () => {
+            if(!imageData) return alert('请上传图片');
+            let k = +document.getElementById('kValue').value;
+            let space = document.getElementById('colorSpace').value;
+            let type = document.getElementById('chartType').value;
+            if(k<5) return alert('K≥5');
+
+            let pixels = [];
+            let data = imageData.data;
+            for(let i=0;i<data.length;i+=4){
+                let r=data[i],g=data[i+1],b=data[i+2];
+                pixels.push(space==='rgb' ? [r,g,b] : rgbToLab(r,g,b));
+            }
+
+            clusterResult = kmeans(pixels, k);
+            let rgbs = clusterResult.centers.map(c=>space==='rgb'?c.map(Math.round):labToRgb(...c));
+
+            // 显示颜色块
+            let blocks = document.getElementById('colorBlocks');
+            blocks.innerHTML = '';
+            rgbs.forEach(c=>{
+                let div = document.createElement('div');
+                div.className='color-block';
+                div.style.background=`rgb(${c})`;
+                blocks.appendChild(div);
+            });
+
+            // 图表
+            let option = type==='bar' ? {
+                xAxis:{data:rgbs.map((_,i)=>`C${i+1}`)},
+                yAxis:{},
+                series:[{type:'bar',data:clusterResult.counts.map((v,i)=>({value:v,itemStyle:{color:`rgb(${rgbs[i]})`}}))}]
+            } : {
+                series:[{type:'pie',radius:'60%',data:clusterResult.counts.map((v,i)=>({value:v,name:`C${i+1}`,itemStyle:{color:`rgb(${rgbs[i]})`}}))}]
+            };
+            myChart.setOption(option);
+        };
+
+      document.getElementById('checkHarmony').onclick = async function() {
+    if (!clusterResult) {
+        alert('请先运行聚类');
+        return;
+    }
+
+    let colorSpace = document.getElementById('colorSpace').value;
+    
+    // 获取所有聚类中心颜色（颜色均值）
+    let rgbCenters = clusterResult.centers.map(c => {
+        if (colorSpace === 'rgb') {
+            return [Math.round(c[0]), Math.round(c[1]), Math.round(c[2])];
+        } else {
+            return labToRgb(...c);
+        }
+    });
+
+    // 自动生成 C1、C2、C3...C9
+    let colorList = rgbCenters.map((rgb, index) => {
+        return `C${index+1}: rgb(${rgb.join(', ')})`;
+    }).join('\n');
+
+    // ✅ 真正贴合作业：分析所有颜色均值是否和谐
+    const prompt = `
+你是专业色彩分析师。
+以下是图片经过K-Means聚类后得到的【所有颜色均值】：
+${colorList}
+
+请直接判断：这一组所有颜色搭配是否和谐？
+只需要回答两点：
+1. 和谐 / 基本和谐 / 不和谐
+2. 简要理由（需要有计算数据支撑）
+`;
+
+    let resultDiv = document.getElementById('ai-result');
+    resultDiv.innerText = '正在分析颜色均值是否和谐...';
+
+    try {
+        const response = await fetch(DOUBAO_API_URL, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${DOUBAO_API_KEY}`
+            },
+            body: JSON.stringify({
+                model: DOUBAO_MODEL,
+                input: [{ role: "user", content: prompt }]
+            })
+        });
+
+        const data = await response.json();
+        console.log("返回数据：", data);
+
+        // 正确提取AI回答
+        let answer = "";
+        if (data.output) {
+            for (let item of data.output) {
+                if (item.type === "message" && item.content) {
+                    answer = item.content[0].text;
+                    break;
+                }
+            }
+        }
+
+        if (answer) {
+            resultDiv.innerText = "颜色均值和谐度分析：\n" + answer;
+        } else {
+            resultDiv.innerText = "AI返回异常，请重试";
+        }
+
+    } catch (e) {
+        resultDiv.innerText = "调用失败：" + e.message;
+    }
+};
+
+
+
+</script>
+</body>
+</html>
